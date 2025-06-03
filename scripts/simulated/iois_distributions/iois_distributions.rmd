@@ -1,0 +1,92 @@
+---
+title: Sampling vs. Jittering
+subtitle: Comparison of IOIs' probability distributions
+author: Jelle van der Werff
+date: 28 February 2023
+output:
+    html_document:
+        code_folding: hide
+        toc: true
+---
+
+# Summary
+Here we check the equality of the distributions for IOIs created using the Sampling method and the jittering method.
+We use sample data to do so.
+
+```{r preliminaries, warning = FALSE, message = FALSE}
+# for easy loading of packages
+if (!require("pacman")) install.packages("pacman")
+
+# load packages
+p_load("here", "effectsize", "ggplot2", "scico", "ggridges", "plyr", "dplyr")
+
+# select correct here
+here <- here::here
+
+# for relative file paths (e.g. here('Input', 'file.csv'))
+here::i_am(file.path("scripts", "simulated", "iois_distributions", "iois_distributions.rmd"))
+
+# custom ggplot theme
+source(here("scripts", "custom_ggplot_theme.R"))
+
+# knitr settings
+knitr::opts_chunk$set(out.width = "100%", warning = FALSE, message = FALSE)
+
+# load data
+iois <- readRDS(here("data", "simulated", "iois_simulated.rds"))
+iois$ioi <- iois$ioi / 1000
+iois$condition <- factor(iois$condition, levels = c("Jittering", "Sampling"))
+```
+
+# Plot
+
+## IOIs' distributions
+
+```{r density-both-ridges}
+
+ggplot(iois, aes(x = ioi, fill = condition, colour = condition)) +
+  xlim(0, 1) +
+  geom_density_ridges(aes(y = condition), show.legend = FALSE, linewidth = 0) +
+  theme_jelle() +
+  scale_fill_manual(values = c("Sampling" = colours$sampling, "Jittering" = colours$jittering)) +
+  scale_colour_manual(values = c("Sampling" = colours$sampling, "Jittering" = colours$jittering)) +
+  labs(x = "") +
+  theme(
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    legend.position = "bottom", legend.justification = "center"
+  ) +
+  scale_y_discrete(expand = c(0.1, 0))
+
+ggsave(here("plots", "simulated", "iois_distribution_ridges.pdf"), width = 4, height = 4)
+```
+
+## Distributions of sequence durations
+
+```{r duration-both-ridges}
+
+durations <- ddply(iois, .(condition, sequence_id), summarise, duration = sum(ioi))
+
+durations$condition <- factor(durations$condition, levels = c("Sampling", "Jittering"))
+
+ggplot(durations, aes(x = duration, fill = condition, colour = condition)) +
+  geom_density(show.legend = FALSE, linewidth = 0, alpha = 1) +
+  theme_jelle() +
+  labs(x = "") +
+  scale_fill_manual(values = c("Sampling" = colours$sampling, "Jittering" = colours$jittering)) +
+  theme(
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    legend.position = "bottom", legend.justification = "center",
+    panel.grid.major.y = element_blank()
+  )
+
+ggsave(here("plots", "simulated", "sequence_durations_ridges.pdf"), width = 4, height = 3)
+
+```
+
+# KS-test
+```{r t-test}
+ks <- ks.test(iois$ioi[iois$condition == "Sampling"], iois$ioi[iois$condition == "Jittering"])
+ks
+```

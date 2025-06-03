@@ -1,0 +1,140 @@
+---
+title: Sampling vs. Jittering
+subtitle: Autocorrelations in stimulus and response
+author: Jelle van der Werff
+date: 28 February 2023
+output:
+    html_document:
+        code_folding: hide
+        toc: true
+---
+
+# Prelims and dataprep
+
+```{r prelims, warning = FALSE, message = FALSE}
+# for easy loading of packages
+if (!require("pacman")) install.packages("pacman")
+
+# load packages
+p_load("here", "ggplot2", "scico", "plyr", "dplyr", "reshape2", "nlme", "effectsize", "sjPlot")
+
+# select correct here
+here <- here::here
+
+# for relative file paths (e.g. here('Input', 'file.csv'))
+here::i_am(file.path("scripts", "tapping", "autocorrelations", "autocorrelations.rmd"))
+
+# custom ggplot theme
+source(here("scripts", "custom_ggplot_theme.R"))
+
+# knitr settings
+knitr::opts_chunk$set(out.width = "100%", warning = FALSE, message = FALSE)
+
+# load data
+itis <- readRDS(here("data", "tapping_clean", "tapping_intervals.rds"))
+```
+
+```{r calculate-acfs, eval = FALSE}
+itis.wide <- melt(itis, measure.vars = c("stim_ioi", "resp_iti"))
+colnames(itis.wide)[19] <- "stim_resp"
+itis.wide$stim_resp <- as.character(itis.wide$stim_resp)
+itis.wide$stim_resp[itis.wide$stim_resp == "resp_iti"] <- "Response"
+itis.wide$stim_resp[itis.wide$stim_resp == "stim_ioi"] <- "Stimulus"
+itis.wide$stim_resp <- as.factor(itis.wide$stim_resp)
+
+acf.wide <- ddply(itis.wide, .(pp_id, condition, length, tempo, variance, sequence_id, stim_resp), summarize,
+  "0" = acf(value, lag.max = 0, plot = FALSE, na.action = na.pass)$acf[1],
+  "1" = acf(value, lag.max = 1, plot = FALSE, na.action = na.pass)$acf[2],
+  "2" = acf(value, lag.max = 2, plot = FALSE, na.action = na.pass)$acf[3],
+  "3" = acf(value, lag.max = 3, plot = FALSE, na.action = na.pass)$acf[4],
+  "4" = acf(value, lag.max = 4, plot = FALSE, na.action = na.pass)$acf[5],
+  "5" = acf(value, lag.max = 5, plot = FALSE, na.action = na.pass)$acf[6]
+)
+
+acf.long <- melt(acf.wide, measure.vars = c("0", "1", "2", "3", "4", "5"))
+acf.long$variable <- as.character(acf.long$variable, levels = c("Stimulus", "Response"))
+colnames(acf.long)[8] <- "lag"
+acf.long$lag <- factor(as.integer(acf.long$lag))
+colnames(acf.long)[9] <- "acf"
+
+# save data
+saveRDS(acf.long, here("data", "tapping_clean", "tapping_acf.rds"))
+```
+
+
+# Plot
+
+
+```{r plot-acfs}
+acf.long <- readRDS(here("data", "tapping_clean", "tapping_acf.rds"))
+acf.long$stim_resp <- factor(acf.long$stim_resp, levels = c("Stimulus", "Response"))
+
+
+values.df <- ddply(acf.long, .(condition, stim_resp, lag), summarize,
+  mean = mean(acf, na.rm = TRUE),
+  mean_min_sd = mean(acf, na.rm = TRUE) - sd(acf, na.rm = TRUE),
+  mean_plus_sd = mean(acf, na.rm = TRUE) + sd(acf, na.rm = TRUE)
+)
+
+
+ggplot(values.df, aes(x = lag, y = mean, fill = condition)) +
+  stat_summary(geom = "bar", position = position_dodge(width = 1)) +
+  geom_linerange(aes(ymin = mean_min_sd, ymax = mean_plus_sd),
+    position = position_dodge(width = 1), show.legend = FALSE,
+  ) +
+  facet_wrap(~ factor(stim_resp), strip.position = "top", ncol = 1) +
+  labs(x = "", y = "") +
+  theme_jelle() +
+  scale_fill_manual(values = c("Sampling" = colours$sampling, "Jittering" = colours$jittering)) +
+  scale_colour_manual(values = c("Sampling" = colours$sampling, "Jittering" = colours$jittering)) +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    plot.title.position = "plot"
+  ) +
+  theme(legend.position = "none", strip.text = element_blank(), axis.text = element_text(size = 18))
+
+ggsave(here("plots", "tapping", "autocorrelations.pdf"), height = 12, width = 8)
+```
+
+
+
+
+# Mixed-effects model (only lag-one responses)
+
+```{r lme}
+acf.resps.lagone <- acf.long[(acf.long$stim_resp == "Response") & (acf.long$lag == 1), ]
+
+# start with baseline
+baseline <- gls(acf ~ 1, method = "ML", data = acf.resps.lagone, na.action = na.omit)
+
+# add in random intercept
+random <- lme(acf ~ 1,
+  random = ~ 1 | pp_id,
+  method = "ML",
+  data = acf.resps.lagone,
+  control = lmeControl(opt = "optim"),
+  na.action = na.omit
+)
+anova(baseline, random) # significant
+
+# effect of tempo
+tempo <- update(random, . ~ . + tempo)
+anova(tempo, random) # significant
+
+# effect of variance
+variance <- update(tempo, . ~ . + variance)
+anova(variance, tempo) # not significant
+
+# effect of condition
+condition <- update(tempo, . ~ . + condition)
+anova(condition, tempo) # significant
+
+# effect of length
+length <- update(condition, . ~ . + length)
+anova(length, condition) # not significant
+
+acf_model <- condition
+summary(acf_model)
+effectsize(acf_model)
+```
+

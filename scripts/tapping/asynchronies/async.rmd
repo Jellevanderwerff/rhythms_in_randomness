@@ -1,0 +1,171 @@
+---
+title: "Sampling vs. Jittering: Stimulus-response asynchronies"
+author: Jelle van der Werff
+date: 02/09/2022
+output:
+    html_document:
+        code_folding: hide
+        toc: true
+---
+
+# Introduction
+Here, we aim to answer the question: Does the underlying regularity in jittering sequences lead to more accurate
+tapping.
+
+The DV is:
+
+* $log|\Delta_{\textrm{sync}}|$, which is the log-transformed absolute difference between each response onset and its corresponding stimulus onset.
+
+
+```{r preliminaries, warning = FALSE, message = FALSE}
+############# PACKAGES AND OTHER PRELIMINARIES ############
+
+# for easy loading of packages
+if (!require("pacman")) install.packages("pacman")
+
+# load packages
+p_load("plyr", "dplyr", "here", "ggplot2", "ggsci", "knitr", "kableExtra", "nlme", "effectsize", "sjPlot", "scico", "cowplot", "emmeans", "ggstance")
+
+# for relative file paths (e.g. here('Input', 'file.csv'))
+here::i_am(file.path("scripts", "tapping", "asynchronies", "async.rmd"))
+
+## Load data
+asyncs <- readRDS(here("data", "tapping_clean", "tapping_asyncs.rds"))
+
+# get custom ggplot theme
+source(here("scripts", "custom_ggplot_theme.R"))
+
+# make async abs
+asyncs$async_abs <- abs(asyncs$async)
+
+# remove missing values
+asyncs <- asyncs[!is.na(asyncs$async_abs), ]
+
+# log transform
+asyncs$async_abs_log <- log(asyncs$async_abs)
+asyncs <- asyncs[(!is.na(asyncs$async_abs_log)) & (!is.infinite(asyncs$async_abs_log)), ]
+
+# Labels for plots
+labels <- as_labeller(c(
+  "400" = "Faster tempo\n(400 ms)",
+  "500" = "Slower tempo\n(500 ms)",
+  "Sampling" = "Sampling",
+  "Jittering" = "Jittering",
+  "0.25" = "More variance",
+  "0.2" = "Less variance",
+  "25" = "Shorter (25 events)",
+  "35" = "Longer (35 events)"
+))
+
+# Knitr settings
+knitr::opts_chunk$set(cache = TRUE, out.width = "100%", warning = FALSE, message = FALSE)
+```
+
+
+# Table
+
+
+```{r table}
+asyncs.table <- ddply(asyncs, .(tempo, variance, length, condition), summarize,
+  async_mean = mean(async_abs, na.rm = TRUE),
+  async_sd = sd(async_abs, na.rm = TRUE)
+)
+
+kable(asyncs.table) %>% kableExtra::kable_styling(bootstrap_options = "striped")
+```
+
+# Modelling
+## Check normality
+
+```{r check-normality}
+ggplot(asyncs, aes(x = async_abs_log, colour = factor(condition, levels = c("Sampling", "Jittering")),
+  fill = factor(condition, levels = c("Sampling", "Jittering")))) +
+  geom_histogram() +
+  facet_grid(tempo + variance ~ factor(condition, levels = c("Sampling", "Jittering")) + length, labeller = labels) +
+  labs(x = expression(log ~ Delta[sync]), y = "Count") +
+  theme_jelle() +
+  scale_fill_manual(values = c("Sampling" = colours$sampling, "Jittering" = colours$jittering)) +
+  scale_colour_manual(values = c("Sampling" = colours$sampling, "Jittering" = colours$jittering)) +
+  theme(legend.position = "bottom", legend.justification = "center")
+
+
+ggsave(here("plots", "tapping", "assumptions", "async_normality.pdf"))
+```
+
+```{r model}
+mod <- lme(async_abs_log ~ 1 + tempo + variance + condition + length,
+  random = ~ 1 | pp_id,
+  data = asyncs,
+  control = lmeControl(opt = "optim"),
+  method = "ML",
+  na.action = na.omit
+)
+summary(mod)
+effectsize(mod)
+```
+
+
+```{r plot-lme}
+plot_lme <- plot_model(mod, type = "pred", terms = "condition")
+
+plot_build <- ggplot_build(plot_lme)
+
+df <- plot_build$data[[2]]
+df$x[df$x == 1] <- "Sampling"
+df$x[df$x == 2] <- "Jittering"
+df$x <- factor(df$x, levels = c("Sampling", "Jittering"))
+
+ggplot(df, aes(x = x, colour = x)) +
+  geom_pointrange(aes(ymin = ymin, ymax = ymax, y = y), linewidth = 2, size = 2) +
+  theme_jelle() +
+  scale_colour_manual(values = c("Sampling" = colours$sampling, "Jittering" = colours$jittering)) +
+  theme(legend.position = "none", axis.title.x = element_blank(), axis.title.y = element_blank())
+ggsave(here("plots", "tapping", "async_predicted_bycondition.pdf"), width = 4, height = 4)
+```
+
+```{r forestplot}
+# , )
+
+plot_model(mod, type = "std", axis.labels = rev(c("Tempo [500 ms]", "Variance [More]", "Condition [Jittering]", "Length [Longer]"))) +
+  labs(title = "Standardized effect sizes for absolute stimulus-response asynchronies", subtitle = expression("Mixed-effects model for" ~ Delta[sync])) +
+  theme_jelle() +
+  ylim(-0.25, 0.5) +
+  geom_hline(yintercept = c(-0.25, 0, 0.25, 0.5), linetype = "dashed", colour = "#cbcbcb") +
+  theme(legend.position = "none") +
+  theme(plot.title = element_text(hjust = 0))
+
+ggsave(here("plots", "tapping", "async_forestplot.png"), scale = 0.75)
+ggsave(here("plots", "tapping", "async_forestplot.eps"), scale = 0.75)
+```
+
+
+```{r emmeans-allconditions}
+mmeans <- data.frame(emmeans(mod, ~ condition + tempo + variance + length))
+mmeans$condition <- factor(mmeans$condition, levels = c("Sampling", "Jittering"))
+
+mmeans$condition_otherfactors_code <- paste(mmeans$tempo, mmeans$variance, mmeans$length, sep = "_")
+mmeans$condition_otherfactors_code <- factor(mmeans$condition_otherfactors_code)
+mmeans$condition_group <- factor(paste(mmeans$condition, mmeans$condition_otherfactors_code, sep = "_"))
+
+ggplot(
+  mmeans,
+  aes(
+    y = condition_otherfactors_code,
+    x = emmean,
+    xmin = lower.CL,
+    xmax = upper.CL,
+    colour = condition,
+    group = condition
+  )
+) +
+  geom_pointrange(show.legend = FALSE, position = position_dodgev(0.2)) +
+  theme_jelle() +
+  labs(
+    x = "", y = ""
+  ) +
+  scale_colour_manual(values = c("Sampling" = colours$sampling, "Jittering" = colours$jittering)) +
+  guides(colour = guide_legend(reverse = TRUE)) +
+  theme(axis.text.y = element_blank())
+
+ggsave(here("plots", "tapping", "async_marginalmeans.pdf"), width = 3, height = 4)
+```

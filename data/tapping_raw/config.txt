@@ -1,0 +1,34 @@
+# Experiment config
+# There are 16 cells in total (i.e. trial types). This is hard coded in the rest of the code (in stimuli.py
+
+[training]
+# Number of trials in one round (there's two rounds)
+number_of_trials = 4
+
+# Number of successful trials needed to get through the round
+number_of_successful_trials_needed = 3
+
+
+[experiment]
+n_trials = 80
+n_trials_per_block = 10
+
+mean_ioi_slow = 500
+mean_ioi_fast = 400
+
+# Standard deviations as a fraction of mean IOI
+sigma_small = 0.2
+sigma_large = 0.25
+
+# Number of events minus number_of_blind_taps
+length_short = 25
+length_long = 30
+
+# Number of trials per cell (i.e. specific condition)
+trials_per_cell = 5
+
+# Number of silent events
+number_of_blind_taps = 5
+
+# This is determined in REPP's config.py; the value used here is only used for checking whether overlap occurs
+event_duration = 50

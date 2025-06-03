@@ -1,0 +1,533 @@
+---
+title: "NPOR: Data preparation"
+author: jellevanderwerff
+date: 04/04/2022
+output:
+  html_document:
+    code_folding: hide
+
+---
+
+# Loading packages
+
+```{r load-packages-and-data}
+############# PACKAGES AND OTHER PRELIMINARIES ############
+
+# for easy loading of packages
+if (!require("pacman")) install.packages("pacman")
+
+# load packages
+p_load("stringr", "ini", "gdata", "plyr", "dplyr", "here", "entropy")
+here <- here::here
+
+# for relative file paths (e.g. here('Input', 'file.csv'))
+here::i_am(file.path("scripts", "tapping", "prepare_dataframes", "tapping_dataprep.rmd"))
+
+# Load custom helper functions
+source(here("scripts", "tapping", "prepare_dataframes", "functions.R"))
+
+####### EXPERIMENT CONFIG PARAMETERS #######
+
+# Read in the experiment config file
+config <- read.ini(here("data", "tapping_raw", "config.txt"))
+# Change data types
+for (i in seq_along(config$experiment)) {
+  config$experiment[i] <- as.double(config$experiment[i])
+}
+for (i in seq_along(config$training)) {
+  config$training[i] <- as.double(config$training[i])
+}
+
+############# FILE LOCATIONS ############
+
+# folders
+input_dir <- here("Input")
+data_participants_info_dir <- here("data", "tapping_raw", "data_participants_info")
+data_participants_tapping_dir <- here("data", "tapping_raw", "data_participants_tapping")
+
+# files
+data_participants_info_filenames <- list.files(data_participants_info_dir)
+data_participants_tapping_filenames <- list.files(data_participants_tapping_dir)
+
+##### INITIAL DATAFRAME ######
+pp_ids <- integer()
+
+# First the general participant info file
+if (length(data_participants_info_filenames) > 1) {
+  stop("Error: More than one file in the data_participants_info dir")
+} else {
+  participants.info <-
+    read.csv(file.path(
+      data_participants_info_dir,
+      data_participants_info_filenames[1]
+    ))
+}
+
+# Then all the participant files
+for (i in seq_along(data_participants_tapping_filenames)) {
+  filename <- data_participants_tapping_filenames[i]
+  if (endsWith(filename, ".csv")) {
+    pp_id <- as.integer(str_extract(filename, "[0-9]+"))
+    pp_ids <- c(pp_ids, pp_id)
+
+    assign(
+      sprintf("participant.tapping.%d", pp_id),
+      read.csv(file.path(data_participants_tapping_dir, filename))
+    )
+  } else {
+    stop("Files other than csv files in the participant tapping data dir")
+  }
+}
+
+# Combine everything into one df
+
+# start with an empty df
+tapping.raw <- data.frame(matrix(nrow = 0, ncol = 30))
+# get colnames from one of the df's and add column pp_id
+colnames(tapping.raw) <- c("pp_id", colnames(get(paste0("participant.tapping.", pp_ids[1]))))
+
+for (pp_id in pp_ids) {
+  temp_list <- get(str_glue("participant.tapping.{pp_id}"))
+
+  temp_df <- as.data.frame(temp_list)
+
+  # add pp_id to df as column
+  for (i in seq_len(nrow(temp_df))) {
+    temp_df$pp_id[i] <- pp_id
+  }
+  # combine with empty list
+  tapping.raw <- rbind(tapping.raw, temp_df)
+}
+```
+
+# Loading data
+
+
+```{r prepare-participants-info}
+# First create a df (or list) with all relevant pp info
+participants.info.raw <- read.csv(here(
+  "data", "tapping_raw", "data_participants_info",
+  data_participants_info_filenames[1]
+))
+
+desired_columns <- c(
+  "pp_id", "age", "gender", "L1", "handedness",
+  "n_resampled"
+)
+
+# Output df for participants info
+participants.info.prepared <- data.frame(matrix(nrow = 0, ncol = length(desired_columns)))
+colnames(participants.info.prepared) <- desired_columns
+
+# musicality output for reliability analysis
+participants.musicalexperience <- data.frame(matrix(nrow = 0, ncol = 9))
+colnames(participants.musicalexperience) <- c("pp_id", 1:8)
+
+for (pp_id in pp_ids) {
+  pp_df <- participants.info[participants.info$pp_id == pp_id, ]
+
+  # age is easy
+  age <- pp_df$age
+
+  # gender
+  gender_raw <- tolower(pp_df$gender_str)
+
+  gender <- switch(gender_raw,
+    man = 0,
+    male = 0,
+    mannelijk = 0,
+    m = 0,
+    vrouw = 1,
+    vrouwelijk = 1,
+    v = 1,
+    female = 1,
+    woman = 1,
+    other = 2
+  )
+  if (is.null(gender)) {
+    print("UNKNOWN GENDER IN DATASET; CONTINUING.")
+  }
+
+  # L1
+  L1_raw <- tolower(pp_df$L1_str)
+  L1 <- switch(L1_raw,
+    nederlands = 0,
+    nl = 0,
+    dutch = 0,
+    english = 1,
+    en = 1,
+    engels = 1,
+    chinese = 2,
+    cantonese = 3,
+    mandarin = 4,
+    duits = 5,
+    german = 5,
+    french = 6,
+    italian = 7,
+    polish = 8,
+    pools = 8
+  )
+
+  # handedness
+  handedness_raw <- tolower(pp_df$handedness_str)
+  handedness <- switch(handedness_raw,
+    right = 0,
+    left = 1,
+    ambidextrous = 2
+  )
+
+
+  musicality_row <- c(
+    pp_df$musicality_question_1,
+    pp_df$musicality_question_2,
+    pp_df$musicality_question_3,
+    pp_df$musicality_question_4,
+    pp_df$musicality_question_5,
+    pp_df$musicality_question_6,
+    pp_df$musicality_question_7,
+    pp_df$musicality_question_8
+  )
+
+  # add row to musicality dataframe
+  participants.musicalexperience[nrow(participants.musicalexperience) + 1, ] <- c(pp_id, musicality_row)
+
+  # add n_resampled
+  n_resampled <- pp_df$n_resampled
+
+  # add pp info to the output df
+  pp_row <- c(
+    pp_id, age, gender, L1, handedness,
+    n_resampled
+  )
+  participants.info.prepared[nrow(participants.info.prepared) + 1, ] <- pp_row
+}
+
+# Do proper datatypes
+participants.info.prepared$gender <- as.factor(participants.info.prepared$gender)
+participants.info.prepared$L1 <- as.factor(participants.info.prepared$L1)
+participants.info.prepared$handedness <- as.factor(participants.info.prepared$handedness)
+participants.info.prepared$n_resampled <- as.integer(participants.info.prepared$n_resampled)
+
+## musicality
+
+# First code 4 the other way around
+participants.musicalexperience$`4` <- dplyr::recode(participants.musicalexperience$`4`,
+  "1" = 5,
+  "2" = 4,
+  "3" = 3,
+  "4" = 2,
+  "5" = 1
+)
+
+# mean centring
+participants.musicalexperience$`1c` <- scale(participants.musicalexperience$`1`)
+participants.musicalexperience$`2c` <- scale(participants.musicalexperience$`2`)
+participants.musicalexperience$`3c` <- scale(participants.musicalexperience$`3`)
+participants.musicalexperience$`4c` <- scale(participants.musicalexperience$`4`)
+participants.musicalexperience$`5c` <- scale(participants.musicalexperience$`5`)
+participants.musicalexperience$`6c` <- scale(participants.musicalexperience$`6`)
+participants.musicalexperience$`7c` <- scale(participants.musicalexperience$`7`)
+participants.musicalexperience$`8c` <- scale(participants.musicalexperience$`8`)
+
+saveRDS(participants.musicalexperience, here("data", "musical_experience", "participants_musicalexperience.rds"))
+
+participants.info.prepared$musicality <- double(length = nrow(participants.info.prepared))
+```
+
+
+# Cleaning
+
+```{r cleaning}
+# delete all unusable responses
+tapping.removed <- tapping.raw[tapping.raw$is_failed == "True", ]
+tapping.clean <- tapping.raw[tapping.raw$is_failed == "False", ]
+saveRDS(tapping.removed, here("data", "tapping_discarded", "tapping_sequences_discarded.rds"))
+saveRDS(tapping.raw, here("data", "tapping_raw", "tapping_raw.rds"))
+gdata::keep(splitPythonListString, tapping.clean, sure = TRUE, participants.info.prepared)
+```
+
+
+# ITI dataframe
+
+```{r ITIs, eval = FALSE}
+ITIs <- data.frame(matrix(NA, nrow = nrow(tapping.clean) * 28, ncol = 20))
+
+# colnames(ITIs) <- col_names
+
+cur_row <- 1
+
+for (row_i in seq_len(nrow(tapping.clean))) {
+  tapping_row <- tapping.clean[row_i, ]
+  pp_id <- tapping_row$pp_id
+  participant_row <- participants.info.prepared[participants.info.prepared$pp_id == pp_id, ]
+  # Don't need n_resampled:
+  out_list <- as.list(participant_row[-6])
+  out_list$stim_id <- tapping_row$stim_id
+  out_list$sequence_id <- paste(pp_id, tapping_row$stim_id, sep = "_")
+  out_list$condition <- tapping_row$condition
+  out_list$length <- tapping_row$length
+  out_list$tempo <- tapping_row$tempo
+  out_list$variance <- tapping_row$sigma_fraction
+
+  out_list$interval_i <- 1:(out_list$length - 2)
+
+  if (out_list$length == 25) {
+    out_list$stim_ioi <- diff(as.double(splitPythonListString(tapping_row$onsets_input)))[1:23]
+    out_list$resp_iti <- as.double(splitPythonListString(tapping_row$resp_ioi))[1:23]
+  } else if (out_list$length == 35) {
+    out_list$stim_ioi <- diff(as.double(splitPythonListString(tapping_row$onsets_input)))[1:33]
+    out_list$resp_iti <- as.double(splitPythonListString(tapping_row$resp_ioi))[1:33]
+  }
+
+  out_list$stim_tempo <- mean(out_list$stim_ioi)
+  out_list$resp_tempo <- mean(out_list$resp_iti, na.rm = TRUE)
+  out_list$stim_sd <- sd(out_list$stim_ioi)
+  out_list$resp_sd <- sd(out_list$resp_iti, na.rm = TRUE)
+
+  out_list$ioi_iti_diff <- out_list$stim_ioi - out_list$resp_iti
+
+  out_list_df <- as.data.frame(out_list)
+
+  start <- cur_row
+  end <- start + nrow(out_list_df) - 1
+  ITIs[start:end, ] <- out_list_df
+
+  cur_row <- cur_row + nrow(out_list_df)
+
+  print(cur_row)
+}
+
+# Here remove empties
+ITIs <- ITIs[1:cur_row - 1, ]
+colnames(ITIs) <- colnames(out_list_df)
+
+# proper datatypes etc.
+ITIs$pp_id <- as.factor(ITIs$pp_id)
+ITIs$variance <- as.factor(ITIs$variance)
+ITIs$tempo <- as.factor(ITIs$tempo)
+ITIs$length <- as.factor(ITIs$length)
+ITIs$age <- as.integer(ITIs$age)
+ITIs$handedness <- as.factor(ITIs$handedness)
+ITIs$gender <- as.factor(ITIs$gender)
+
+
+ITIs$resp_iti[ITIs$resp_ITI == NaN] <- NA
+ITIs$resp_iti[ITIs$ioi_iti_diff == NaN] <- NA
+
+ITIs$condition[ITIs$condition == "jittering"] <- "Jittering"
+ITIs$condition[ITIs$condition == "sampling"] <- "Sampling"
+ITIs$condition <- as.factor(ITIs$condition)
+
+# Write out
+saveRDS(ITIs, here("data", "tapping_clean", "tapping_intervals.rds"))
+write.csv(ITIs, here("data", "tapping_clean", "tapping_intervals.csv"))
+```
+
+# Asyncs dataframe
+
+```{r asyncs, eval = FALSE}
+asyncs <- data.frame(matrix(NA, nrow = nrow(tapping.clean) * 30, ncol = 18))
+
+
+cur_row <- 1
+
+for (row_i in seq_len(nrow(tapping.clean))) {
+  tapping_row <- tapping.clean[row_i, ]
+  pp_id <- tapping_row$pp_id
+  participant_row <- participants.info.prepared[participants.info.prepared$pp_id == pp_id, ]
+  # Don't need n_resampled:
+  out_list <- as.list(participant_row[-6])
+  out_list$stim_id <- tapping_row$stim_id
+  out_list$sequence_id <- paste(pp_id, tapping_row$stim_id, sep = "_")
+  out_list$condition <- tapping_row$condition
+  out_list$length <- tapping_row$length
+  out_list$tempo <- tapping_row$tempo
+  out_list$variance <- tapping_row$sigma_fraction
+
+  out_list$event_i <- 1:(out_list$length - 1)
+  out_list$async <- as.single(splitPythonListString(tapping_row$asyncs)[1:(out_list$length - 1)])
+
+  out_list$stim_tempo <- mean(diff(as.double(splitPythonListString(tapping_row$onsets_input)))[1:(out_list$length - 2)])
+  out_list$resp_tempo <- mean(as.double(splitPythonListString(tapping_row$resp_ioi))[1:(out_list$length - 2)], na.rm = TRUE)
+  out_list$resp_sd <- sd(as.double(splitPythonListString(tapping_row$resp_ioi))[1:(out_list$length - 2)], na.rm = TRUE)
+  out_list$stim_sd <- sd(diff(as.double(splitPythonListString(tapping_row$onsets_input)))[1:(out_list$length - 2)], na.rm = TRUE)
+
+
+  out_list_df <- as.data.frame(out_list)
+
+  start <- cur_row
+  end <- start + nrow(out_list_df) - 1
+  asyncs[start:end, ] <- out_list_df
+
+  cur_row <- cur_row + nrow(out_list_df)
+
+  print(cur_row)
+}
+
+# Here remove empties
+asyncs <- asyncs[1:cur_row - 1, ]
+colnames(asyncs) <- colnames(out_list_df)
+
+# proper datatypes etc.
+asyncs$pp_id <- as.factor(asyncs$pp_id)
+asyncs$age <- as.integer(asyncs$age)
+asyncs$tempo <- as.factor(asyncs$tempo)
+asyncs$variance <- as.factor(asyncs$variance)
+asyncs$length <- as.factor(asyncs$length)
+asyncs$handedness <- as.factor(asyncs$handedness)
+asyncs$gender <- as.factor(asyncs$gender)
+
+asyncs$condition[asyncs$condition == "jittering"] <- "Jittering"
+asyncs$condition[asyncs$condition == "sampling"] <- "Sampling"
+asyncs$condition <- as.factor(asyncs$condition)
+
+# Write out
+saveRDS(asyncs, here("data", "tapping_clean", "tapping_asyncs.rds"))
+write.csv(asyncs, here("data", "tapping_clean", "tapping_asyncs.csv"))
+```
+# Tapping onsets dataframe
+
+
+```{r tapping-onsets, eval = FALSE}
+tapping.onsets <- data.frame(matrix(NA, nrow = nrow(tapping.clean) * 30, ncol = 19))
+
+
+cur_row <- 1
+
+for (row_i in seq_len(nrow(tapping.clean))) {
+  tapping_row <- tapping.clean[row_i, ]
+  pp_id <- tapping_row$pp_id
+  participant_row <- participants.info.prepared[participants.info.prepared$pp_id == pp_id, ]
+  # Don't need n_resampled:
+  out_list <- as.list(participant_row[-6])
+  out_list$stim_id <- tapping_row$stim_id
+  out_list$sequence_id <- paste(pp_id, tapping_row$stim_id, sep = "_")
+  out_list$condition <- tapping_row$condition
+  out_list$length <- tapping_row$length
+  out_list$tempo <- tapping_row$tempo
+  out_list$variance <- tapping_row$sigma_fraction
+
+  out_list$event_i <- 1:(out_list$length - 1)
+  out_list$stim_onset <- as.single(splitPythonListString(tapping_row$onsets_input)[1:(out_list$length - 1)])
+  out_list$tap_onset <- splitPythonListString(tapping_row$resp_onsets_aligned)[1:(out_list$length - 1)] - splitPythonListString(tapping_row$stim_onsets_detected)[1]
+
+  out_list$stim_tempo <- mean(diff(as.double(splitPythonListString(tapping_row$onsets_input)))[1:(out_list$length - 2)])
+  out_list$resp_tempo <- mean(as.double(splitPythonListString(tapping_row$resp_ioi))[1:(out_list$length - 2)], na.rm = TRUE)
+  out_list$resp_sd <- sd(as.double(splitPythonListString(tapping_row$resp_ioi))[1:(out_list$length - 2)], na.rm = TRUE)
+  out_list$stim_sd <- sd(diff(as.double(splitPythonListString(tapping_row$onsets_input)))[1:(out_list$length - 2)], na.rm = TRUE)
+
+
+  out_list_df <- as.data.frame(out_list)
+
+  start <- cur_row
+  end <- start + nrow(out_list_df) - 1
+  tapping.onsets[start:end, ] <- out_list_df
+
+  cur_row <- cur_row + nrow(out_list_df)
+
+  print(cur_row)
+}
+
+# Here remove empties
+tapping.onsets <- tapping.onsets[1:cur_row - 1, ]
+colnames(tapping.onsets) <- colnames(out_list_df)
+
+# proper datatypes etc.
+tapping.onsets$pp_id <- as.factor(tapping.onsets$pp_id)
+tapping.onsets$age <- as.integer(tapping.onsets$age)
+tapping.onsets$handedness <- as.integer(tapping.onsets$handedness)
+tapping.onsets$gender <- as.integer(tapping.onsets$gender)
+tapping.onsets$tempo <- as.factor(tapping.onsets$tempo)
+tapping.onsets$variance <- as.factor(tapping.onsets$variance)
+tapping.onsets$length <- as.factor(tapping.onsets$length)
+tapping.onsets$condition[tapping.onsets$condition == "jittering"] <- "Jittering"
+tapping.onsets$condition[tapping.onsets$condition == "sampling"] <- "Sampling"
+tapping.onsets$condition <- as.factor(tapping.onsets$condition)
+
+
+
+# Write out
+saveRDS(tapping.onsets, here("data", "tapping_clean", "tapping_onsets.rds"))
+write.csv(tapping.onsets, here("data", "tapping_clean", "tapping_onsets.csv"))
+```
+
+# Continuation phase (ITIs) dataframe
+
+```{r continuation-ITIs, eval = FALSE}
+synchronization_and_continuation.ITIs <- data.frame(matrix(NA, nrow = nrow(tapping.clean) * 28, ncol = 21))
+
+
+cur_row <- 1
+
+pb <- txtProgressBar(min = 1, max = nrow(tapping.clean) * 47, style = 3)
+
+for (row_i in seq_len(nrow(tapping.clean))) {
+  tapping_row <- tapping.clean[row_i, ]
+  pp_id <- tapping_row$pp_id
+  participant_row <- participants.info.prepared[participants.info.prepared$pp_id == pp_id, ]
+  # Don't need n_resampled:
+  out_list <- as.list(participant_row[-6])
+  out_list$stim_id <- tapping_row$stim_id
+  out_list$sequence_id <- paste(pp_id, tapping_row$stim_id, sep = "_")
+  out_list$condition <- tapping_row$condition
+  out_list$length <- tapping_row$length
+  out_list$tempo <- tapping_row$tempo
+  out_list$variance <- tapping_row$sigma_fraction
+
+  if (out_list$length == 25) {
+    out_list$stim_ioi <- diff(as.double(splitPythonListString(tapping_row$onsets_input)))[1:29]
+    out_list$resp_iti <- as.double(splitPythonListString(tapping_row$resp_ioi))[1:29]
+    out_list$interval_i <- seq(1, 29)
+    out_list$exp_phase <- c(rep("synchronization", 24), rep("continuation", 5))
+  } else if (out_list$length == 35) {
+    out_list$stim_ioi <- diff(as.double(splitPythonListString(tapping_row$onsets_input)))[1:39]
+    out_list$resp_iti <- as.double(splitPythonListString(tapping_row$resp_ioi))[1:39]
+    out_list$interval_i <- seq(1, 39)
+    out_list$exp_phase <- c(rep("synchronization", 34), rep("continuation", 5))
+  }
+
+
+  out_list$stim_tempo <- mean(out_list$stim_ioi)
+  out_list$resp_tempo <- mean(out_list$resp_iti, na.rm = TRUE)
+  out_list$stim_sd <- sd(out_list$stim_ioi)
+  out_list$resp_sd <- sd(out_list$resp_iti, na.rm = TRUE)
+
+  out_list$ioi_iti_diff <- out_list$stim_ioi - out_list$resp_iti
+
+  out_list_df <- as.data.frame(out_list)
+
+  start <- cur_row
+  end <- start + nrow(out_list_df) - 1
+  synchronization_and_continuation.ITIs[start:end, ] <- out_list_df
+
+  cur_row <- cur_row + nrow(out_list_df)
+
+  setTxtProgressBar(pb, cur_row)
+}
+
+# Here remove empties
+synchronization_and_continuation.ITIs <- synchronization_and_continuation.ITIs[1:cur_row - 1, ]
+colnames(synchronization_and_continuation.ITIs) <- colnames(out_list_df)
+
+# proper datatypes etc.
+synchronization_and_continuation.ITIs$pp_id <- as.factor(synchronization_and_continuation.ITIs$pp_id)
+synchronization_and_continuation.ITIs$age <- as.integer(synchronization_and_continuation.ITIs$age)
+synchronization_and_continuation.ITIs$tempo <- as.factor(synchronization_and_continuation.ITIs$tempo)
+synchronization_and_continuation.ITIs$variance <- as.factor(synchronization_and_continuation.ITIs$variance)
+synchronization_and_continuation.ITIs$length <- as.factor(synchronization_and_continuation.ITIs$length)
+synchronization_and_continuation.ITIs$handedness <- as.factor(synchronization_and_continuation.ITIs$handedness)
+synchronization_and_continuation.ITIs$gender <- as.factor(synchronization_and_continuation.ITIs$gender)
+
+
+synchronization_and_continuation.ITIs$resp_iti[synchronization_and_continuation.ITIs$resp_ITI == NaN] <- NA
+synchronization_and_continuation.ITIs$resp_iti[synchronization_and_continuation.ITIs$ioi_iti_diff == NaN] <- NA
+
+synchronization_and_continuation.ITIs$condition[synchronization_and_continuation.ITIs$condition == "jittering"] <- "Jittering"
+synchronization_and_continuation.ITIs$condition[synchronization_and_continuation.ITIs$condition == "sampling"] <- "Sampling"
+synchronization_and_continuation.ITIs$condition <- as.factor(synchronization_and_continuation.ITIs$condition)
+synchronization_and_continuation.ITIs$exp_phase <- as.factor(synchronization_and_continuation.ITIs$exp_phase)
+
+# Write out
+saveRDS(synchronization_and_continuation.ITIs, here("data", "tapping_clean", "tapping_synchronization_and_continuation_ITIs.rds"))
+write.csv(synchronization_and_continuation.ITIs, here("data", "tapping_clean", "tapping_synchronization_and_continuation_ITIs.csv"))
+```

@@ -1,0 +1,96 @@
+---
+title: "Sampling vs Jittering: Frequencies"
+author: Jelle van der Werff
+date: 06/09/2022
+output:
+    html_document:
+        code_folding: hide
+        toc: true
+---
+```{r load-packages-and-data}
+
+# packages
+if (!require(pacman)) install.packages(pacman)
+p_load('knitr', 'kableExtra', 'plyr', 'dplyr', 'here', 'knitr', 'kableExtra')
+here <- here::here
+here::i_am(file.path('scripts', 'tapping', 'missing_data', 'missing_data.rmd'))
+
+# data
+```
+
+```{r removed-sequences}
+
+tapping.removed <- readRDS(here('data', 'tapping_discarded', 'tapping_sequences_discarded.rds'))
+tapping.raw <- readRDS(here('data', 'tapping_raw', 'tapping_raw.rds'))
+
+removed.seqs.freqs <- ddply(tapping.removed, .(tempo, sigma_fraction, condition, length),
+                                              summarize,
+                                              n = length(resp_ioi))
+colnames(removed.seqs.freqs) <- c("Tempo", "Variance", "Condition", "Length", "n discarded")
+removed.seqs.freqs$Condition[removed.seqs.freqs$Condition == "jittering"] <- "Jittering"
+removed.seqs.freqs$Condition[removed.seqs.freqs$Condition == "sampling"] <- "Sampling"
+removed.seqs.freqs$Variance[removed.seqs.freqs$Variance == 0.2] <- "Less"
+removed.seqs.freqs$Variance[removed.seqs.freqs$Variance == 0.25] <- "More"
+
+all.seqs.freqs <- ddply(tapping.raw, .(tempo, sigma_fraction, length, condition), summarize,
+                        n = length(resp_ioi))
+
+removed.seqs.freqs$`n before cleaning` <- all.seqs.freqs$n
+removed.seqs.freqs <- removed.seqs.freqs[ , c(1:4, 6, 5)]
+removed.seqs.freqs$`n after cleaning` <- removed.seqs.freqs$`n before cleaning` - removed.seqs.freqs$`n discarded`
+
+kable(removed.seqs.freqs) %>% kable_styling(bootstrap_options = "striped")
+removed.seqs.freqs.latex <- kable(removed.seqs.freqs, linesep = "", format = "latex", booktabs = TRUE) %>%
+kable_styling(latex_options = "scale_down")
+
+```
+
+
+```{r missing-data-taps}
+
+taps <- readRDS(here('data', 'tapping_clean', 'tapping_onsets.rds'))
+taps <- taps[(taps$length == 25 & taps$event_i %in% 3:24) | (taps$length == 35 & taps$event_i %in% 3:34), ]
+taps$variance <- as.single(as.character(taps$variance))
+taps$variance[taps$variance == 0.2] <- "Less"
+taps$variance[taps$variance == 0.25] <- "More"
+
+taps.freqs <- ddply(taps, .(tempo, variance, condition, length), summarize,
+                    before_cleaning = length(tap_onset),
+                    discarded = sum(is.nan(tap_onset)))
+taps.freqs$after_cleaning <- taps.freqs$before_cleaning - taps.freqs$discarded
+colnames(taps.freqs) <- c("Tempo", "Variance", "Condition", "Length", "n before cleaning", "n discarded",
+                          "n after cleaning")
+kable(taps.freqs) %>% kable_styling(bootstrap_options = "striped")
+
+
+```
+```{r missing-data-intervals}
+
+intervals <- readRDS(here('data', 'tapping_clean', 'tapping_intervals.rds'))
+intervals <- intervals[(intervals$length == 25 & intervals$interval_i %in% 3:23) | (intervals$length == 35 & intervals$interval_i %in% 3:33), ]
+intervals$variance <- as.single(as.character(intervals$variance))
+intervals$variance[intervals$variance == 0.2] <- "Less"
+intervals$variance[intervals$variance == 0.25] <- "More"
+
+intervals.freqs <- ddply(intervals, .(tempo, variance, condition, length), summarize,
+                    before_cleaning = length(resp_iti),
+                    discarded = sum(is.nan(resp_iti)))
+intervals.freqs$after_cleaning <- intervals.freqs$before_cleaning - intervals.freqs$discarded
+colnames(intervals.freqs) <- c("Tempo", "Variance", "Condition", "Length", "n before cleaning",
+                               "n discarded", "n after cleaning")
+
+kable(intervals.freqs) %>% kable_styling(bootstrap_options = "striped")
+
+```
+
+```{r combined_table}
+
+missing.data <- taps.freqs
+missing.data[ ,8:10] <- intervals.freqs[ ,5:7]
+colnames(missing.data) <- c("Tempo", "Variance", "Condition", "Length", "Taps before cleaning", "Taps discarded", "Taps clean", "ITIs before cleaning", "ITIs discarded", "ITIs clean")
+
+kable(missing.data) %>% kable_styling(bootstrap_options = "striped")
+missing.data.latex <- kable(missing.data, linesep = "", format = "latex", booktabs = TRUE) %>%
+kable_styling(latex_options = "scale_down")
+
+```

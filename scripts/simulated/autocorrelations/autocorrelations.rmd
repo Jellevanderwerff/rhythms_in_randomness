@@ -1,0 +1,60 @@
+---
+title: Sampling vs. Jittering
+subtitle: Autocorrelations for simulated data
+author: Jelle van der Werff
+date: 28 February 2023
+output:
+    html_document:
+        code_folding: hide
+        toc: true
+---
+
+# Summary
+Here we calculate autocorrelations for simulated data, comparing the Sampling method to the jittering method.
+
+```{r preliminaries, warning = FALSE, message = FALSE}
+# for easy loading of packages
+if (!require("pacman")) install.packages("pacman")
+
+# load packages
+p_load("here", "ggplot2", "plyr", "knitr", "scico", "kableExtra")
+
+# select correct here
+here <- here::here
+
+# for relative file paths (e.g. here('Input', 'file.csv'))
+here::i_am(file.path("scripts", "simulated", "autocorrelations", "autocorrelations.rmd"))
+
+# load custom ggplot theme
+source(here("scripts", "custom_ggplot_theme.R"))
+
+# load data
+acf <- readRDS(here("data", "simulated", "iois_autocorrelations.rds"))
+
+# knitr settings
+knitr::opts_chunk$set(out.width = "100%", warning = FALSE, message = FALSE)
+```
+
+
+# Plot
+```{r plot}
+sd_data <- ddply(acf, .(condition, lag), summarize,
+  acf_mean = mean(acf), acf_min_sd = mean(acf) - sd(acf), acf_plus_sd = mean(acf) + sd(acf)
+)
+sd_data$condition <- factor(sd_data$condition, levels = c("Sampling", "Jittering"))
+
+ggplot(sd_data, aes(
+  x = lag, y = acf_mean, fill = condition
+)) +
+  geom_bar(stat = "identity",
+    position = position_dodge(width = 1), linewidth = 0, show.legend = FALSE
+  ) +
+  facet_wrap(~condition, ncol = 2) +
+  geom_linerange(aes(ymin = acf_min_sd, ymax = acf_plus_sd), position = position_dodge(width = 1), show.legend = FALSE) +
+  theme_jelle() +
+  theme(strip.text = element_blank(), panel.grid.major.y = element_blank()) +
+  labs(x = "", y = "") +
+  scale_fill_manual(values = c("Sampling" = colours$sampling, "Jittering" = colours$jittering)) +
+  scale_colour_manual(values = c("Sampling" = colours$sampling, "Jittering" = colours$jittering))
+ggsave(here("plots", "simulated", "acf.pdf"), width = 10, height = 6)
+```

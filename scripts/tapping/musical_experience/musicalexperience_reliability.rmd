@@ -1,0 +1,39 @@
+---
+title: "R Notebook"
+author: jellevanderwerff
+date: 31/03/2022
+output: html_document
+---
+
+
+```{r preliminaries}
+# for easy loading of packages
+if (!require("pacman")) install.packages("pacman")
+
+# load packages
+p_load("here", "psych")
+
+# There's a 'here' function in the plyr package as well, so let's choose the one I want:
+here <- here::here
+
+# for relative file paths
+here::i_am(file.path("scripts", "tapping", "musical_experience", "musicalexperience_reliability.rmd")) # from now on we can use e.g. here('Input', 'file.csv') as path
+
+# knitr settings
+knitr::opts_chunk$set(
+    cache = TRUE, warning = FALSE, out.width = "100%", echo = FALSE,
+    message = FALSE, cache.lazy = FALSE
+)
+```
+
+```{r load-data}
+musical.experience <- readRDS(here("data", "musical_experience", "participants_musicalexperience.rds"))
+```
+
+```{r reliability}
+musicalexperience.questions <- musical.experience[, 10:17]
+
+reliability.musicalexp <- psych::alpha(musicalexperience.questions, check.keys = TRUE)
+summary(reliability.musicalexp)
+```
+

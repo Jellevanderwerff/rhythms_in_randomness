@@ -1,0 +1,158 @@
+---
+title: "Sampling vs Jittering"
+subtitle: "Check pilot vs experiment"
+author: Jelle van der Werff
+date: 06/09/2022
+output:
+    html_document:
+        code_folding: hide
+        toc: true
+---
+
+# Introduction
+Here, we check whether there was an influence of whether participants were part of the pilot on the results.
+We include pilot vs not pilot as a factor in the final mixed-effects models for the three DVs.
+
+# Preliminaries
+
+```{r load-packages}
+
+# for easy loading of packages
+if (!require('pacman')) install.packages('pacman')
+
+# load packages
+p_load('ggplot2', 'nlme', 'effectsize', 'knitr', 'kableExtra', 'plyr', 'dplyr', 'reshape2', 'ggsci', 'here',
+       'sjPlot', 'scico', 'cowplot')
+
+# use here from here instead of from plyr
+here <- here::here
+
+# for relative file paths (e.g. here('Input', 'file.csv'))
+here::i_am(file.path('scripts', 'tapping', 'tempo', 'tempo.rmd'))
+
+# get custom ggplot theme
+source(here('scripts', 'custom_ggplot_theme.R'))
+
+# Knitr settings
+knitr::opts_chunk$set(cache = TRUE, out.width = "100%", warning = FALSE, message = FALSE)
+
+```
+
+
+```{r load-tempo-data}
+
+# Load data
+ITIs <- readRDS(here('data', 'tapping_clean', 'tapping_intervals.rds'))
+
+# Make e_tempo variable
+ITIs$resp_tempo_error <- ITIs$resp_iti - as.integer(as.character(ITIs$stim_tempo))  # we use the theoretical tempo
+ITIs$resp_tempo_error_abs <- abs(ITIs$resp_tempo_error)
+
+# Do log transform
+ITIs$resp_tempo_error_abs_log <- log(ITIs$resp_tempo_error_abs)
+
+# Remove missing values
+ITIs <- ITIs[(!is.na(ITIs$resp_tempo_error_abs_log)) & (!is.infinite(ITIs$resp_tempo_error_abs_log)), ]
+
+
+```
+
+
+```{r load-sd-data}
+
+ITIs.sd <- ddply(ITIs, .(tempo, variance, length, condition, pp_id, age, handedness, gender, sequence_id), summarize,
+                                                  iti_sd = sd(resp_iti, na.rm=TRUE))
+# remove missing values
+ITIs.sd <- ITIs.sd[!is.na(ITIs.sd$iti_sd), ]
+
+ITIs.sd$pp_id <- as.factor(ITIs.sd$pp_id)
+ITIs.sd$length <- as.factor(ITIs.sd$length)
+ITIs.sd$variance <- as.factor(ITIs.sd$variance)
+ITIs.sd$tempo <- as.factor(ITIs.sd$tempo)
+ITIs.sd$condition <- as.factor(ITIs.sd$condition)
+ITIs.sd$handedness <- as.factor(ITIs.sd$handedness)
+ITIs.sd$gender <- as.factor(ITIs.sd$gender)
+
+```
+
+```{r load-asyncs}
+
+## Load data
+asyncs <- readRDS(here('data', 'tapping_clean', 'tapping_asyncs.rds'))
+
+# make async abs
+asyncs$async_abs <- abs(asyncs$async)
+
+# remove missing values
+asyncs <- asyncs[!is.na(asyncs$async_abs), ]
+
+# log transform
+asyncs$async_abs_log <- log(asyncs$async_abs)
+asyncs <- asyncs[(!is.na(asyncs$async_abs_log)) & (!is.infinite(asyncs$async_abs_log)), ]
+
+```
+
+
+
+```{r make-pilot-factor}
+
+pp_ids <- as.integer(as.character(ITIs$pp_id))
+pp_ids <- sort(unique(pp_ids))
+rel_pp_ids <- pp_ids[1:9]
+
+ITIs$pilot <- ifelse(ITIs$pp_id %in% rel_pp_ids, 'pilot', 'experiment')
+ITIs$pilot <- as.factor(ITIs$pilot)
+asyncs$pilot <- ifelse(asyncs$pp_id %in% rel_pp_ids, 'pilot', 'experiment')
+asyncs$pilot <- as.factor(asyncs$pilot)
+ITIs.sd$pilot <- ifelse(ITIs.sd$pp_id %in% rel_pp_ids, 'pilot', 'experiment')
+ITIs.sd$pilot <- as.factor(ITIs.sd$pilot)
+
+
+```
+
+
+# Check models
+
+```{r asyncs}
+
+asyncs.model.normal <- lme(async_abs_log ~ 1 + tempo + variance + condition + length,
+                  random = ~1 | pp_id,
+                  method = "ML",
+                  data = asyncs,
+                  control = lmeControl(opt = "optim"),
+                  na.action = na.omit)
+asyncs.model.pilot <- update(asyncs.model.normal, .~. + pilot)
+anova(asyncs.model.normal, asyncs.model.pilot)
+
+```
+
+```{r e_tempo}
+
+itis.model.normal <- lme(resp_tempo_error_abs_log ~ tempo + variance + condition + length + tempo:condition + condition:length,
+              random = ~1 | pp_id,
+              method = "ML",
+              data = ITIs,
+              control = lmeControl(opt = "optim"),
+              na.action = na.omit)
+itis.model.pilot <- update(itis.model.normal, .~. + pilot)
+anova(itis.model.normal, itis.model.pilot)
+
+```
+
+```{r itis-sd}
+
+iti_sd ~ tempo + variance + condition + length + variance:condition +      condition:length
+
+sds.model.normal <- lme(iti_sd ~ tempo + variance + condition + length + variance:condition + condition:length,
+                        random = ~1|pp_id,
+                        method = "ML",
+                        data = ITIs.sd,
+                        control = lmeControl(opt = "optim"),
+                        na.action = na.omit)
+sds.model.pilot <- update(sds.model.normal, .~. + pilot)
+anova(sds.model.normal, sds.model.pilot)
+
+```
+
+
+

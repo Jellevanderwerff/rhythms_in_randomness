@@ -1,0 +1,219 @@
+---
+title: "Sampling vs. Jittering: Continuation phase analysis"
+author: Jelle van der Werff
+date: 02/09/2022
+output:
+    html_document:
+        code_folding: hide
+        toc: true
+---
+
+# Load packages
+
+```{r preliminaries, warning = FALSE, message = FALSE}
+# for easy loading of packages
+if (!require("pacman")) install.packages("pacman")
+
+# load packages
+p_load("here", "ggplot2", "nlme", "plyr", "dplyr", "sjPlot", "scico", "effectsize", "cowplot")
+
+# for relative file paths (e.g. here('Input', 'file.csv'))
+here <- here::here
+here::i_am(file.path("scripts", "tapping", "continuation", "continuation.rmd"))
+
+## Load data
+ITIs <- readRDS(here("data", "tapping_clean", "tapping_synchronization_and_continuation_ITIs.rds"))
+
+
+# Labels for plots
+labels <- as_labeller(c(
+        "400" = "Faster tempo\n(400 ms)",
+        "500" = "Slower tempo\n(500 ms)",
+        "sampling" = "Sampling",
+        "jittering" = "Jittering",
+        "0.25" = "More variance",
+        "0.2" = "Less variance",
+        "25" = "Shorter (25 events)",
+        "35" = "Longer (35 events)"
+))
+
+# get custom ggplot theme
+source(here("scripts", "custom_ggplot_theme.R"))
+
+# Change condition into factor with named levels
+ITIs$condition <- as.factor(ITIs$condition)
+levels(ITIs$condition) <- c("Jittering", "Sampling")
+
+# Knitr settings
+knitr::opts_chunk$set(cache = TRUE, out.width = "100%", warning = FALSE, message = FALSE)
+```
+
+# Plot
+
+We only want the 4 intervals that precede interval no. 24/34, and the 4 intervals from 26-29 (or 36-39).
+
+```{r select-intervals}
+ITIs <- ITIs[(ITIs$length == 25 & ITIs$interval_i %in% c(20:23, 26:29)) | (ITIs$length == 35 & ITIs$interval_i %in% c(30:33, 36:39)), ]
+```
+
+
+```{r simple-plot}
+ITIs.forplot <- ITIs[(ITIs$length == 25 & ITIs$interval_i %in% 20:29) | (ITIs$length == 35 & ITIs$interval_i %in% 30:39), ]
+
+ITIs.forplot$condition <- factor(ITIs.forplot$condition, levels = c("Sampling", "Jittering"))
+
+ggplot(ITIs.forplot, aes(x = factor(interval_i), y = resp_iti, colour = condition, group = condition)) +
+        stat_summary(geom = "pointrange") +
+        stat_summary(geom = "line") +
+        facet_grid(tempo + variance ~ length, scales = "free_x", labeller = labels) +
+        labs(x = "Interval number", y = "Inter-tap interval (milliseconds)", colour = "Condition") +
+        theme_jelle() +
+        theme(legend.position = "bottom", legend.justification = "center") +
+        scale_colour_manual(values = c("Sampling" = colours$sampling, "Jittering" = colours$jittering)) +
+        geom_vline(data = ITIs.forplot[ITIs.forplot$length == 25, ], aes(xintercept = 4.5), linetype = "dashed") +
+        geom_vline(data = ITIs.forplot[ITIs.forplot$length == 35, ], aes(xintercept = 4.5), linetype = "dashed")
+
+ggsave(here("plots", "tapping", "continuation_itis.pdf"), width = 12, height = 8)
+```
+
+
+# Is tapping closer to the stimulus tempo after the final isochronous event?
+
+We take into account only the final 4 intervals before the isochronous event for the synchronization phase.
+We do this because there is motor/tempo drift towards the end of the sequence.
+and compare them to the 4 following the isochronous event for the continuation phase.
+
+```{r calculate-abs-error}
+ITIs$e_tempo <- abs(ITIs$resp_iti - ITIs$stim_tempo)
+ITIs$e_tempo_log <- log(ITIs$e_tempo) # do log transform
+```
+
+
+```{r e_tempo_plot}
+ggplot(ITIs, aes(x = factor(interval_i), y = e_tempo, colour = condition, group = condition)) +
+        stat_summary(geom = "pointrange") +
+        stat_summary(geom = "line") +
+        facet_grid(variance + tempo ~ length, scales = "free_x", labeller = labels)
+```
+
+
+
+
+
+```{r model-e_tempo}
+# start with baseline
+baseline <- gls(e_tempo_log ~ 1, method = "ML", data = ITIs, na.action = na.omit)
+
+# add in random intercept
+random <- lme(e_tempo_log ~ 1,
+        random = ~ 1 | pp_id,
+        method = "ML",
+        data = ITIs,
+        control = lmeControl(opt = "optim"),
+        na.action = na.omit
+)
+anova(baseline, random) # significant
+
+# effect of tempo
+tempo <- update(random, . ~ . + tempo)
+anova(tempo, random) # significant
+
+# effect of variance
+variance <- update(tempo, . ~ . + variance)
+anova(variance, tempo) # significant
+
+# effect of experimental phase (i.e. synchronization or continuation)
+phase <- update(variance, . ~ . + exp_phase)
+anova(phase, variance) # not significant
+
+e_tempo_model <- phase
+summary(e_tempo_model)
+effectsize(e_tempo_model)
+```
+
+
+
+
+
+```{r plot-model-etempo}
+plot_model(e_tempo_model, colors = "black", show.legend = FALSE, type = "std", dot.size = 0.75) +
+        scale_x_discrete(labels = rev(c("Tempo [500]", "Variance [More]", "Trial phase [Sync.]"))) +
+        labs(title = NULL, y = expression(Standardized ~ beta ~ group("(", log ~ e[tempo], ")"))) +
+        theme_jelle() +
+        scale_colour_manual(values = c("black", "black")) +
+        theme(
+                panel.grid.major.x = ggplot2::element_line(
+                        color = "#cbcbcb", linetype = "dashed"
+                ),
+                legend.position = "none",
+                axis.title.y = element_text(family = "Helvetica", face = "bold")
+        ) +
+        ylim(-0.5, 0.5)
+
+ggsave(here("plots", "tapping", "continuation_estimates_e_tempo.pdf"), width = 4, height = 3)
+```
+
+
+
+
+# Is there more consistent tapping after the final isochronous event?
+
+```{r calculate-sd}
+ITIs.sd <- ddply(ITIs, .(pp_id, condition, variance, tempo, length, sequence_id, exp_phase), summarize, sd = sd(resp_iti, na.rm = TRUE))
+```
+
+
+```{r model-sd}
+# start with baseline
+baseline <- gls(sd ~ 1, method = "ML", data = ITIs.sd, na.action = na.omit)
+# add in random intercept
+random <- lme(sd ~ 1,
+        random = ~ 1 | pp_id,
+        method = "ML",
+        data = ITIs.sd,
+        control = lmeControl(opt = "optim"),
+        na.action = na.omit
+)
+anova(baseline, random) # significant
+
+# effect of tempo
+tempo <- update(random, . ~ . + tempo)
+anova(tempo, random) # significant
+
+# effect of variance
+variance <- update(tempo, . ~ . + variance)
+anova(variance, tempo) # significant
+
+# effect of experimental phase (synchronization vs. continuation)
+exp_phase <- update(variance, . ~ . + exp_phase)
+anova(exp_phase, variance) # significant
+
+# effect of condition (Sampling vs. jittering)
+condition <- update(exp_phase, . ~ . + condition)
+anova(condition, exp_phase) # significant
+
+# effect of length
+length <- update(condition, . ~ . + length)
+anova(condition, length) # not significant
+
+# interaction effect of condition and phase
+condition.phase <- update(condition, . ~ . + condition:exp_phase)
+anova(condition.phase, condition) # not significant
+
+sd_model <- condition.phase
+summary(sd_model)
+effectsize(sd_model)
+```
+
+```{r sd-forest-plot}
+plot_model(sd_model, colors = "black", show.legend = FALSE, type = "std", dot.size = 0.75) +
+        scale_x_discrete(labels = rev(c("Tempo [500]", "Variance [More]", "Trial phase [Sync.]", "Cond. [Sampling]", expression(Cond. %*% phase)))) +
+        labs(title = NULL, y = expression(Standardized ~ beta ~ group("(", SD[ITI], ")"))) +
+        theme_jelle() +
+        scale_colour_manual(values = c("black", "black")) +
+        theme(legend.position = "none") +
+        theme(panel.grid.major.x = ggplot2::element_line(color = "#cbcbcb", linetype = "dashed")) +
+        ylim(-0.5, 0.5)
+
+ggsave(here("plots", "tapping", "continuation_estimates_sd.pdf"), width = 4, height = 3)
+```

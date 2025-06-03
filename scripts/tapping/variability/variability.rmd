@@ -1,0 +1,270 @@
+---
+title: "Sampling vs. Jittering: Tapping variability"
+author: Jelle van der Werff
+date: 02/09/2022
+output:
+    html_document:
+        code_folding: hide
+        toc: true
+---
+
+# Introduction
+Here, we aim to answer the question: Does the underlying regularity in jittering sequences lead to more regular
+tapping?
+
+The DV is:
+
+* $\textrm{SD}_\textrm{ITI}$, which is the variability in the intervals between response taps in a specific trial.
+
+
+Though $\textrm{SD}_\textrm{async}$ is also an often-used variable (see Repp & Su, 2013), it is not used here, as
+it was considered not so useful in contexts where the stimulus is as anisochronous as it is here.
+
+The independent variables used here are:
+
+* Condition (Sampling or jittering)
+* Sequence length (25 or 35)
+* Sequence tempo (400 ms or 500 ms)
+* Amount of variance (less or more)
+
+
+
+```{r preliminaries, warning = FALSE, message = FALSE}
+############# PACKAGES AND OTHER PRELIMINARIES ############
+
+
+# for easy loading of packages
+if (!require("pacman")) install.packages("pacman")
+
+# load packages
+p_load(
+  "plyr", "dplyr", "nlme", "here", "ggplot2", "reshape2", "ggsci", "knitr", "kableExtra", "scico", "cowplot",
+  "effectsize", "sjPlot", "emmeans"
+)
+here <- here::here
+
+# for relative file paths (e.g. here('Input', 'file.csv'))
+here::i_am(file.path("scripts", "tapping", "variability", "variability.rmd"))
+
+# Load data
+ITIs <- readRDS(here("data", "tapping_clean", "tapping_intervals.rds"))
+
+# load custom ggplot theme
+source(here("scripts", "custom_ggplot_theme.R"))
+
+# Labels for plots
+labels <- as_labeller(c(
+  "400" = "Faster tempo\n(400 ms)",
+  "500" = "Slower tempo\n(500 ms)",
+  "Sampling" = "Sampling",
+  "Jittering" = "Jittering",
+  "0.25" = "More variance",
+  "0.2" = "Less variance",
+  "25" = "Shorter (25 events)",
+  "35" = "Longer (35 events)"
+))
+
+# Knitr settings
+knitr::opts_chunk$set(cache = TRUE, out.width = "100%", warning = FALSE, message = FALSE)
+```
+
+# Descriptives
+
+## Table
+```{r desc-table}
+ITIs$cov_iti <- (ITIs$resp_sd / ITIs$resp_tempo) * 100
+ITIs$cov_ioi <- (ITIs$stim_sd / ITIs$stim_tempo) * 100
+
+tapping_variability_descriptives <- ddply(ITIs, .(tempo, variance, length, condition), summarize,
+  n = length(resp_iti),
+  ioi_mean = mean(stim_ioi, na.rm = TRUE),
+  iti_mean = mean(resp_iti, na.rm = TRUE),
+  ioi_sd = sd(stim_ioi, na.rm = TRUE),
+  iti_sd = sd(resp_iti, na.rm = TRUE)
+)
+
+
+
+kable(tapping_variability_descriptives) %>% kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+
+# Summarize SDs
+
+```{r summarize-sds}
+ITIs.sd <- ddply(ITIs, .(tempo, variance, length, condition, pp_id, age, handedness, gender, sequence_id), summarize,
+  iti_sd = sd(resp_iti, na.rm = TRUE)
+)
+# remove missing values
+ITIs.sd <- ITIs.sd[!is.na(ITIs.sd$iti_sd), ]
+
+
+ITIs.sd$pp_id <- as.factor(ITIs.sd$pp_id)
+ITIs.sd$length <- as.factor(ITIs.sd$length)
+ITIs.sd$variance <- as.factor(ITIs.sd$variance)
+ITIs.sd$tempo <- as.factor(ITIs.sd$tempo)
+ITIs.sd$condition <- as.factor(ITIs.sd$condition)
+ITIs.sd$handedness <- as.factor(ITIs.sd$handedness)
+ITIs.sd$gender <- as.factor(ITIs.sd$gender)
+```
+
+# LME
+## Check normality
+
+```{r check-normality}
+ggplot(ITIs.sd, aes(
+  x = iti_sd, colour = factor(condition, levels = c("Sampling", "Jittering")),
+  fill = factor(condition, levels = c("Sampling", "Jittering"))
+)) +
+  geom_histogram() +
+  facet_grid(tempo + variance ~ factor(condition, levels = c("Sampling", "Jittering")) + length, labeller = labels) +
+  labs(x = expression(italic(SD)[ITI]), y = "Count") +
+  theme_jelle() +
+  scale_fill_manual(values = c("Sampling" = colours$sampling, "Jittering" = colours$jittering)) +
+  scale_color_manual(values = c("Sampling" = colours$sampling, "Jittering" = colours$jittering)) +
+  theme(legend.position = "bottom", legend.justification = "center")
+
+ggsave(here("plots", "tapping", "assumptions", "sd_normality.pdf"))
+ggsave(here("plots", "tapping", "assumptions", "sd_normality.png"), dpi = 600)
+```
+
+## Modelling
+```{r sd-lme}
+# start with baseline
+baseline <- gls(iti_sd ~ 1, method = "ML", data = ITIs.sd, na.action = na.omit)
+
+# add in random intercept
+random <- lme(iti_sd ~ 1,
+  random = ~ 1 | pp_id,
+  method = "ML",
+  data = ITIs.sd,
+  control = lmeControl(opt = "optim"),
+  na.action = na.omit
+)
+anova(baseline, random) # significant
+
+# effect of tempo
+tempo <- update(random, . ~ . + tempo)
+anova(tempo, random) # significant
+
+# effect of variance
+variance <- update(tempo, . ~ . + variance)
+anova(variance, tempo) # significant
+
+# effect of condition
+condition <- update(variance, . ~ . + condition)
+anova(condition, variance) # significant
+
+# effect of length
+length <- update(condition, . ~ . + length)
+anova(length, condition) # significant
+
+# effect of age
+age <- update(length, . ~ . + age)
+anova(age, length) # not significant
+
+# effect of handedness
+handedness <- update(length, . ~ . + handedness)
+anova(handedness, length) # not significant
+
+# effect of gender
+gender <- update(length, . ~ . + gender)
+anova(gender, length) # not significant
+
+# interaction effect of condition x tempo
+condition.tempo <- update(length, . ~ . + condition:tempo)
+anova(condition.tempo, length) # not significant
+
+# interaction effect of condition x variance
+condition.variance <- update(length, . ~ . + condition:variance)
+anova(condition.variance, length) # significant
+
+# interaction effect of condition x length
+condition.length <- update(condition.variance, . ~ . + condition:length)
+anova(condition.length, condition.variance) # significant
+
+
+sd_model <- condition.length
+summary(sd_model)
+effectsize(sd_model)
+```
+
+
+## Plot model
+
+```{r plot-model-interaction-length}
+plot_lme <- plot_model(sd_model, type = "int")
+
+plot_build <- ggplot_build(plot_lme[[2]])
+
+ggplot(plot_build$data[[2]], aes(x = factor(group), colour = factor(c(2, 2, 1, 1)))) +
+  geom_pointrange(aes(y = y, ymin = ymin, ymax = ymax)) +
+  geom_line(aes(x = factor(group), y = y, group = factor(c(2, 2, 1, 1)))) +
+  labs(x = "Length", colour = "Condition", y = expression(italic(SD)[ITI])) +
+  theme_jelle() +
+  scale_x_discrete(labels = c("25 events", "35 events")) +
+  scale_colour_manual(values = c("1" = colours$sampling, "2" = colours$jittering)) +
+  theme(legend.position = "none")
+ggsave(here("plots", "tapping", "sd_interaction_conditionlength.pdf"), height = 4, width = 4)
+```
+
+
+
+```{r plot-model-interaction-variance}
+plot_lme <- plot_model(sd_model, type = "int")
+
+plot_build <- ggplot_build(plot_lme[[1]])
+
+ggplot(plot_build$data[[2]], aes(x = factor(c(2, 2, 1, 1)), colour = factor(group))) +
+  geom_pointrange(aes(y = y, ymin = ymin, ymax = ymax)) +
+  geom_line(aes(x = factor(c(2, 2, 1, 1)), y = y, group = factor(group))) +
+  labs(x = "Variance", colour = "Condition", y = expression(italic(SD)[ITI])) +
+  scale_x_discrete(labels = c("Less variance", "More variance")) +
+  scale_color_scico_d(palette = "roma", labels = c("Sampling", "Jittering"))
+ggsave(here("plots", "tapping", "sd_interaction_conditionvariance.eps"), scale = 0.4, height = 6.5, width = 10)
+```
+
+```{r forestplot}
+plot_model(sd_model, type = "std", axis.labels = rev(c("Tempo [500 ms]", "Variance [More]", "Condition [Jittering]", "Length [Longer]", "Interaction [Variance x Condition]", "Interaction [Length x Condition]"))) +
+  labs(title = "Standardized effect sizes for tapping variability", subtitle = expression("Mixed-effects model for" ~ SD[ITI])) +
+  theme_jelle() +
+  theme(legend.position = "none") +
+  theme(plot.title = element_text(hjust = 0)) +
+  ylim(-0.5, 1) +
+  geom_hline(yintercept = c(-0.5, 0, 0.5, 1), linetype = "dashed", color = "#cbcbcb")
+
+ggsave(here("plots", "tapping", "sd_forestplot.png"), scale = 0.75)
+ggsave(here("plots", "tapping", "sd_forestplot.eps"), scale = 0.75)
+```
+
+# Marginal means
+
+```{r emmeans-allconditions}
+mmeans <- data.frame(emmeans(sd_model, ~ condition + tempo + variance + length))
+mmeans$condition <- factor(mmeans$condition, levels = c("Sampling", "Jittering"))
+
+mmeans$condition_otherfactors_code <- paste(mmeans$tempo, mmeans$variance, mmeans$length, sep = "_")
+mmeans$condition_otherfactors <- factor(mmeans$condition_otherfactors_code)
+
+ggplot(
+  mmeans,
+  aes(
+    y = condition_otherfactors_code,
+    x = emmean,
+    xmin = lower.CL,
+    xmax = upper.CL,
+    colour = condition,
+    group = condition_otherfactors_code
+  )
+) +
+  geom_pointrange(show.legend = FALSE) +
+  theme_jelle() +
+  labs(
+    x = "", y = ""
+  ) +
+  scale_colour_manual(values = c("Sampling" = colours$sampling, "Jittering" = colours$jittering)) +
+  guides(colour = guide_legend(reverse = TRUE)) +
+  theme(axis.text.y = element_blank())
+
+ggsave(here("plots", "tapping", "sd_marginalmeans.pdf"), width = 3, height = 4)
+```

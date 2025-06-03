@@ -1,0 +1,15 @@
+Sampling (red!)
+Non-converted: #7E1900A5
+Converted: #ab6a59 rgb(171,106,89)
+
+Jittering (blue!)
+Non-converted: #1A3399A5
+Converted: #6a7abd rgb(106,122,189)
+
+Stimulus (ochre)
+Non-converted: #B48A2CA5
+Converted: #b48a2c rgb(180,138,44)
+
+Response (dark blue)
+Non-converted: #3f85bba5
+Converted: #3f85bb rgb(63,133,187)

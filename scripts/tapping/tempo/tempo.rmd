@@ -1,0 +1,312 @@
+---
+title: "Sampling vs Jittering: Tapping tempo"
+author: Jelle van der Werff
+date: 06/09/2022
+output:
+    html_document:
+        code_folding: hide
+        toc: true
+---
+
+
+# Introduction
+
+The question here is, can people use the underlying regularity in jittering sequences to tap
+closer to the sequence tempo? From the mathematical model, it follows that for jittering sequences the
+tempo is more easily estimated.
+
+Used measures:
+
+* Tempo error: $\textrm{error}_i = |\textrm{ITI}_i - \textrm{tempo}|$
+* The inter-tap interval (ITI; the interval between two consecutive taps)
+
+```{r load-packages, message = FALSE, warning = FALSE}
+# for easy loading of packages
+if (!require("pacman")) install.packages("pacman")
+
+# load packages
+p_load(
+  "ggplot2", "nlme", "effectsize", "knitr", "kableExtra", "plyr", "dplyr", "reshape2", "ggsci", "here",
+  "sjPlot", "scico", "cowplot", "emmeans", "ggdist"
+)
+
+# use here from here instead of from plyr
+here <- here::here
+
+# for relative file paths (e.g. here('Input', 'file.csv'))
+here::i_am(file.path("scripts", "tapping", "tempo", "tempo.rmd"))
+
+# get custom ggplot theme
+source(here("scripts", "custom_ggplot_theme.R"))
+
+# Knitr settings
+knitr::opts_chunk$set(cache = TRUE, out.width = "100%", warning = FALSE, message = FALSE)
+```
+
+```{r load-data}
+# Load data
+ITIs <- readRDS(here("data", "tapping_clean", "tapping_intervals.rds"))
+
+# Make e_tempo variable
+ITIs$resp_tempo_error <- ITIs$resp_iti - as.integer(as.character(ITIs$stim_tempo)) # we use the theoretical tempo
+ITIs$resp_tempo_error_abs <- abs(ITIs$resp_tempo_error)
+
+# Do log transform
+ITIs$resp_tempo_error_abs_log <- log(ITIs$resp_tempo_error_abs)
+
+# Remove missing values
+ITIs <- ITIs[(!is.na(ITIs$resp_tempo_error_abs_log)) & (!is.infinite(ITIs$resp_tempo_error_abs_log)), ]
+
+# Labels for plots
+labels <- as_labeller(c(
+  "400" = "Faster tempo\n(400 ms) ",
+  "500" = "Slower tempo\n(500 ms)",
+  "Sampling" = "Sampling",
+  "Jittering" = "Jittering",
+  "0.25" = "More variance",
+  "0.2" = "Less variance",
+  "25" = "Shorter (25 events)",
+  "35" = "Longer (35 events)"
+))
+```
+
+
+# Descriptives
+
+## Tables
+
+Here's the tapping and sequence tempo split out only by the condition and the intended tempo:
+
+```{r tempo-table}
+tempo <- ddply(ITIs, .(condition, tempo), summarize,
+  n = length(resp_iti),
+  mean_stim = mean(stim_ioi, na.rm = TRUE),
+  mean_tap = mean(resp_iti, na.rm = TRUE),
+  sd_tap = sd(resp_iti, na.rm = TRUE)
+)
+
+kable(tempo) %>% kableExtra::kable_styling(bootstrap_options = "striped")
+```
+
+Here it is split out by tempo, amount of variance, length, and condition:
+
+```{r tempo-table-2}
+tempo <- ddply(ITIs, .(tempo, variance, length, condition), summarize,
+  n = length(!is.na(resp_iti)),
+  mean_stim = mean(stim_ioi, na.rm = TRUE),
+  mean_tap = mean(resp_iti, na.rm = TRUE),
+  sd_tap = sd(resp_iti, na.rm = TRUE)
+)
+
+kable(tempo) %>% kableExtra::kable_styling(bootstrap_options = "striped")
+```
+
+
+# Tapping
+
+```{r tapping-error}
+tempo.error <- ddply(ITIs, .(tempo, variance, length, condition, interval_i), summarize,
+  stimulus = mean(stim_ioi, na.rm = TRUE) - tempo,
+  response = mean(resp_iti, na.rm = TRUE) - tempo,
+)
+```
+
+
+
+# Modelling
+
+## Check normality
+```{r check-normality}
+ggplot(ITIs, aes(
+  x = resp_tempo_error_abs_log,
+  colour = factor(condition, levels = c("Sampling", "Jittering")),
+  fill = factor(condition, levels = c("Sampling", "Jittering"))
+)) +
+  geom_histogram() +
+  facet_grid(tempo + variance ~ factor(condition, levels = c("Sampling", "Jittering")) + length, labeller = labels) +
+  labs(x = expression(log ~ italic(e)[tempo]), y = "Count") +
+  theme_jelle() +
+  scale_fill_manual(values = c("Jittering" = colours$jittering, "Sampling" = colours$sampling)) +
+  scale_color_manual(values = c("Jittering" = colours$jittering, "Sampling" = colours$sampling)) +
+  theme(legend.position = "bottom", legend.justification = "center")
+
+ggsave(here("plots", "tapping", "assumptions", "e_tempo_normality.pdf"))
+ggsave(here("plots", "tapping", "assumptions", "e_tempo_normality.png"))
+```
+
+
+* __A__: Sampling, length = 25
+* __B__: Sampling, length = 35
+* __C__: Jittering, length = 25
+* __D__: Jittering, length = 35
+
+
+We're not doing K-S/Shapiro-Wilk because our sample is too big.
+
+
+
+## Model building
+```{r model-tempo-error}
+# start with baseline
+baseline <- gls(resp_tempo_error_abs_log ~ 1, method = "ML", data = ITIs, na.action = na.omit)
+
+# add in random intercept
+random <- lme(resp_tempo_error_abs_log ~ 1,
+  random = ~ 1 | pp_id,
+  method = "ML",
+  data = ITIs,
+  control = lmeControl(opt = "optim"),
+  na.action = na.omit
+)
+anova(baseline, random) # significant
+
+# effect of tempo
+tempo <- update(random, . ~ . + tempo)
+anova(tempo, random) # significant
+
+# effect of variance
+variance <- update(tempo, . ~ . + variance)
+anova(variance, tempo) # significant
+
+# effect of condition
+condition <- update(variance, . ~ . + condition)
+anova(condition, variance) # significant
+
+# effect of length
+length <- update(condition, . ~ . + length)
+anova(length, condition) # significant
+
+# effect of age
+age <- update(length, . ~ . + age)
+anova(age, length) # not significant
+
+# effect of handedness
+handedness <- update(length, . ~ . + handedness)
+anova(handedness, length) # not significant
+
+# effect of gender
+gender <- update(length, . ~ . + gender)
+anova(gender, length) # not significant
+
+# interaction effect of condition x tempo
+condition.tempo <- update(length, . ~ . + condition:tempo)
+anova(condition.tempo, length) # significant
+
+# interaction effect of condition x variance
+condition.variance <- update(condition.tempo, . ~ . + condition:variance)
+anova(condition.variance, condition.tempo) # not significant
+
+# interaction effect of condition x length
+condition.length <- update(condition.tempo, . ~ . + condition:length)
+anova(condition.tempo, condition.length) # significant
+
+
+error_model <- condition.length
+summary(error_model)
+effectsize(error_model)
+```
+
+## Plot model
+
+```{r plot-lme}
+plot_lme <- plot_model(error_model, type = "pred", terms = "condition")
+
+plot_build <- ggplot_build(plot_lme)
+
+ggplot(data = plot_build$data[[2]], aes(x = factor(x), colour = factor(x))) +
+  geom_pointrange(aes(ymin = ymin, ymax = ymax, y = y)) +
+  labs(x = "Condition", colour = "Condition", y = expression(log ~ italic(e)[tempo])) +
+  scale_x_discrete(labels = c("Sampling", "Jittering")) +
+  theme_jelle() +
+  theme(legend.position = "none", axis.title.x = element_blank())
+ggsave(here("plots", "tapping", "e_tempo_predicted_bycondition.pdf"), scale = 0.75, height = 6.5, width = 7)
+```
+
+```{r plot-interaction-length}
+plot_lme <- plot_model(error_model, type = "int")
+
+plot_build <- ggplot_build(plot_lme[[2]])
+
+ggplot(plot_build$data[[2]], aes(colour = factor(c(2, 2, 1, 1)), x = factor(group))) +
+  geom_pointrange(aes(y = y, ymin = ymin, ymax = ymax)) +
+  geom_line(aes(x = factor(group), y = y, group = factor(c(2, 2, 1, 1)))) +
+  labs(x = "Length", colour = "Condition", y = expression(log ~ italic(e)[tempo])) +
+  theme_jelle() +
+  scale_x_discrete(labels = c("25 events", "35 events")) +
+  scale_colour_manual(values = c("1" = colours$sampling, "2" = colours$jittering)) +
+  theme(legend.position = "none")
+
+ggsave(here("plots", "tapping", "e_tempo_interaction_conditionlength.pdf"), height = 4, width = 4)
+```
+
+
+```{r plot-interaction-tempo}
+plot_lme <- plot_model(error_model, type = "int")
+
+plot_build <- ggplot_build(plot_lme[[1]])
+
+ggplot(plot_build$data[[2]], aes(x = factor(c(1, 1, 2, 2)), colour = factor(group))) +
+  geom_pointrange(aes(y = y, ymin = ymin, ymax = ymax), alpha = 0.65) +
+  geom_line(aes(x = factor(c(1, 1, 2, 2)), y = y, group = factor(group)), alpha = 0.65) +
+  labs(x = "Tempo", colour = "Condition", y = expression(log ~ italic(e)[tempo])) +
+  scale_x_discrete(labels = c("Faster tempo\n(400 ms)", "Slower tempo\n(500 ms)")) +
+  theme_jelle() +
+  scale_color_scico_d(palette = "roma", labels = c("Sampling", "Jittering")) +
+  theme(legend.position = "none")
+
+ggsave(here("plots", "tapping", "e_tempo_interaction_conditiontempo.pdf"), height = 4, width = 4)
+```
+
+
+
+```{r forest-plot}
+plot_model(error_model, type = "std", axis.labels = rev(c("Tempo [500 ms]", "Variance [More]", "Condition [Jittering]", "Length [Longer]", "Interaction [Tempo x Condition]", "Interaction [Length x Condition]"))) +
+  labs(title = "Standardized effect sizes for tempo estimation error", subtitle = expression("Mixed-effects model for" ~ e[tempo])) +
+  theme_jelle() +
+  ylim(-0.25, 0.5) +
+  geom_hline(yintercept = c(-0.25, 0, 0.25, 0.5), linetype = "dashed", colour = "#cbcbcb") +
+  theme(legend.position = "none") +
+  theme(plot.title = element_text(hjust = 0))
+
+ggsave(here("plots", "tapping", "e_tempo_forestplot.png"), scale = 0.75)
+ggsave(here("plots", "tapping", "e_tempo_forestplot.eps"), scale = 0.75)
+```
+
+```{r etempo-by-intervalnumber}
+ggplot(ITIs[ITIs$interval_i %in% 3:20, ], aes(x = factor(interval_i), y = resp_tempo_error_abs, colour = condition, group = condition)) +
+  stat_summary(geom = "pointrange") +
+  geom_smooth(method = "lm") +
+  labs(
+    title = expression(bold(e[tempo]) ~ bold("by interval number")),
+    x = expression(ITI[i]), y = expression(Absolute ~ e[tempo]), subtitle = "Collapsed across lengths, tempi, and degrees of variance"
+  ) +
+  theme_jelle() +
+  theme(plot.subtitle = element_text(face = "plain"))
+ggsave(here("plots", "tapping", "e_tempo_byintervalnumber.pdf"), scale = 0.75)
+ggsave(here("plots", "tapping", "e_tempo_byintervalnumber.png"), scale = 0.75)
+```
+
+
+
+# Marginal means
+
+```{r emmeans-plot-all}
+mmeans <- data.frame(emmeans(error_model, ~ condition + tempo + variance + length))
+mmeans$condition <- factor(mmeans$condition, levels = c("Sampling", "Jittering"))
+
+mmeans$condition_otherfactors_code <- paste(mmeans$tempo, mmeans$variance, mmeans$length, sep = "_")
+mmeans$condition_otherfactors <- factor(mmeans$condition_otherfactors_code)
+
+ggplot(mmeans, aes(y = condition_otherfactors_code, x = emmean, xmin = lower.CL, xmax = upper.CL, colour = condition, group = condition_otherfactors_code)) +
+  geom_pointrange(show.legend = FALSE) +
+  theme_jelle() +
+  labs(
+    x = "", y = ""
+  ) +
+  scale_colour_manual(values = c("Sampling" = colours$sampling, "Jittering" = colours$jittering)) +
+  guides(colour = guide_legend(reverse = TRUE)) +
+  theme(axis.text.y = element_blank(
+  ))
+
+ggsave(here("plots", "tapping", "e_tempo_marginalmeans.pdf"), width = 3, height = 4)
+```

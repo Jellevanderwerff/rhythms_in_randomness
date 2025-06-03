@@ -1,0 +1,123 @@
+---
+title: Sampling vs. Jittering
+subtitle: Model vs. data
+author: Jelle van der Werff
+date: 2 May 2023
+output:
+  html_document:
+    code_folding: hide
+    toc: true
+---
+
+# Preliminaries
+
+```{r prelims, warning = FALSE, message = FALSE}
+# for easy loading of packages
+if (!require("pacman")) install.packages("pacman")
+
+# load packages
+p_load("here", "ggplot2", "scico", "plyr", "dplyr", "reshape2", "ggbreak", "cowplot")
+
+# select correct here
+here <- here::here
+
+# for relative file paths (e.g. here('Input', 'file.csv'))
+here::i_am(file.path("scripts", "modelled", "model.Rmd"))
+
+# custom ggplot theme
+source(here("scripts", "custom_ggplot_theme.R"))
+
+# knitr settings
+knitr::opts_chunk$set(out.width = "100%", warning = FALSE, message = FALSE)
+
+# load data
+ITIs <- readRDS(here("data", "tapping_clean", "tapping_intervals.rds"))
+model <- read.csv(here("data", "modelled", "tempo_models.csv"))
+colnames(model) <- c("condition", "strategy", "tempo", "variance", "interval_i", "error")
+model$variance[model$variance == 0.2] <- 0.20
+model <- model[, c("interval_i", "condition", "strategy", "tempo", "variance", "error")]
+```
+
+```{r process-modelled-data}
+# select only intervals 2:9 and interval 22
+model <- model[model$interval_i %in% c(2:9, 22), ]
+# select only relevant columns, in correct order for use later on
+model.relcols <- model[, c("interval_i", "condition", "strategy", "error")]
+```
+
+```{r get-tapping-data}
+# make tempo error
+ITIs$resp_tempo_error <- ITIs$resp_iti - as.integer(as.character(ITIs$stim_tempo)) # we use the theoretical tempo
+ITIs$resp_tempo_error_abs <- abs(ITIs$resp_tempo_error)
+
+# standardize!! (this is an important step)
+ITIs$resp_tempo_error_abs[(ITIs$tempo == 400) & (ITIs$variance == 0.2)] <- ITIs$resp_tempo_error_abs[(ITIs$tempo == 400) & (ITIs$variance == 0.2)] / 80 * 100
+ITIs$resp_tempo_error_abs[(ITIs$tempo == 500) & (ITIs$variance == 0.25)] <- ITIs$resp_tempo_error_abs[(ITIs$tempo == 500) & (ITIs$variance == 0.25)] / 125 * 100
+
+
+# get relevant intervals
+ITIs.relevant <- ITIs[ITIs$interval_i %in% c(3:10, 23), ]
+ITIs.relevant$strategy <- "tapping"
+
+# subtract one from the tapping intervals (we use e.g. ITI no. 3 as a proxy for the estimated tempo based
+#                                          on the first two intervals)
+ITIs.relevant$interval_i <- ITIs.relevant$interval_i - 1
+
+# get relevant cols (in correct order)
+ITIs.forinsertion <- ITIs.relevant[, c("interval_i", "condition", "strategy", "tempo", "variance", "resp_tempo_error_abs")]
+colnames(ITIs.forinsertion) <- colnames(model)
+```
+
+```{r combine}
+model.and.tapping <- rbind(model, ITIs.forinsertion)
+# divide by 100
+model.and.tapping$error <- model.and.tapping$error / 100
+```
+
+
+```{r summarize}
+# combine
+model.and.tapping.summarized <- ddply(model.and.tapping, .(condition, interval_i, strategy), summarize,
+  error = mean(error, na.rm = TRUE)
+)
+```
+
+
+# Plotting
+
+```{r plot-model-summary}
+model.and.tapping.summarized$strategy <- factor(model.and.tapping.summarized$strategy,
+  levels = c(
+    "equal_weights", "optimal",
+    "exp_decay", "tapping"
+  )
+)
+
+labels <- as_labeller(c(
+  "optimal" = "Optimal", "equal_weights" = "Equal weights",
+  "exp_decay" = "Exponential decay", "tapping" = "Tapping results"
+))
+
+model.and.tapping.summarized$condition[model.and.tapping.summarized$condition == "Sampling"] <- "Sampling"
+
+model.and.tapping.summarized$condition <- factor(model.and.tapping.summarized$condition, levels = c("Sampling", "Jittering"))
+
+ggplot(model.and.tapping.summarized, aes(x = factor(interval_i), y = error, colour = condition, group = condition)) +
+  geom_point() +
+  geom_line(data = model.and.tapping.summarized[model.and.tapping.summarized$interval_i %in% 2:9, ],
+  linetype = c(rep("solid", 48), rep("dashed", 16))
+  ) +
+  facet_wrap(~strategy, nrow = 2, labeller = labels, scales = "free_x") +
+  theme_jelle() +
+  scale_colour_manual(values = c("Sampling" = colours$sampling, "Jittering" = colours$jittering)) +
+  theme(legend.position = "none", axis.title = element_blank(), strip.text = element_text(colour = "white")) +
+  guides(colour = guide_legend(label.position = "right")) +
+  geom_vline(aes(xintercept = 8.5), color = "white", linewidth = 4) +
+  geom_segment(aes(x = 8.5, y = 0, yend = 0.76), color = "#cbcbcb", linetype = "dashed") +
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75)) +
+  coord_cartesian(ylim = c(0, 1))
+
+
+ggsave(here("plots", "modelled", "error_with_tapping.pdf"), width = 8, height = 7)
+```
+
