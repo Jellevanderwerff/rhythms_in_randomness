@@ -1,10 +1,10 @@
 # Humans can find rhythm in randomly timed sounds
 
-This repository contains the data, analysis code, and supplementary materials for the article **"Humans can find rhythm in randomly timed sounds"**, to be published in *Royal Society Open Science*.
+This repository contains the data, analysis code, and supplementary materials for the article **"Humans can find rhythm in randomly timed sounds"**.
 
-## Overview
+## Abstract
 
-This study investigates how humans perceive rhythm in sequences of sounds with random timing. We present behavioral experiments and analysis scripts to support our findings.
+To be added.
 
 ## Contents
 
@@ -48,8 +48,8 @@ This study investigates how humans perceive rhythm in sequences of sounds with r
 
 If you use this code or data, please cite our article:
 
-> Jelle van der Werff, Tommaso Tufarelli, Laura Verga, Andrea Ravignani (2025). Humans can find rhythm in randomly timed sounds. *Royal Society Open Science*. DOI: [to be added]
+> Jelle van der Werff, Tommaso Tufarelli, Laura Verga, Andrea Ravignani (2025). Humans can find rhythm in randomly timed sounds.
 
 ## Contact
 
-For questions or feedback, please contact the article's corresponding authors..
+For questions or feedback, please contact the article's corresponding authors.
